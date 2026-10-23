@@ -689,7 +689,7 @@ agx_open_device(void *memctx, struct agx_device *dev)
    uint64_t kernel_size = MAX2(dev->params.vm_kernel_min_size, 32ull << 30);
    struct drm_asahi_vm_create vm_create = {0};
    if (dev->params.gpu_generation == 16 &&
-       dev->params.gpu_variant == 'G') {
+       (dev->params.gpu_variant == 'G' || dev->params.gpu_variant == 'C')) {
       kernel_size = dev->params.vm_kernel_min_size;
       vm_create.kernel_end =
          AGX_APPLE9_RENDER_CONTEXT_BASE + (1ull << 32);
@@ -799,8 +799,10 @@ agx_open_device(void *memctx, struct agx_device *dev)
                                                      : AGX_CHIP_G14G;
       break;
    case 16:
-      assert(dev->params.gpu_variant == 'G');
-      dev->chip = AGX_CHIP_G16G;
+      assert(dev->params.gpu_variant == 'G' ||
+             dev->params.gpu_variant == 'C');
+      dev->chip = dev->params.gpu_variant == 'C' ? AGX_CHIP_G16C
+                                               : AGX_CHIP_G16G;
       break;
    case 17:
       assert(dev->params.gpu_variant == 'P');
@@ -812,10 +814,10 @@ agx_open_device(void *memctx, struct agx_device *dev)
 
    /* Apple9 GPUs require their generation-specific graphics path. */
    dev->apple9_direct_render =
-      dev->chip == AGX_CHIP_G16G || dev->chip == AGX_CHIP_G17P;
+      agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P;
    dev->apple9_trace = agx_apple9_trace_enabled();
 
-   if (dev->chip == AGX_CHIP_G16G || dev->chip == AGX_CHIP_G17P) {
+   if (agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P) {
       simple_mtx_init(&dev->apple9_entry_lock, mtx_plain);
       list_inithead(&dev->apple9_entry_lru);
       util_vma_heap_init(&dev->apple9_entry_heap, AGX_APPLE9_ENTRY_HEADER_SIZE,
@@ -893,7 +895,7 @@ agx_close_device(struct agx_device *dev)
    agx_bo_unreference(dev, dev->scratch_bo);
    u_printf_destroy(&dev->printf);
    agx_bo_cache_evict_all(dev);
-   if (dev->chip == AGX_CHIP_G16G || dev->chip == AGX_CHIP_G17P) {
+   if (agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P) {
       util_vma_heap_finish(&dev->apple9_entry_heap);
       simple_mtx_destroy(&dev->apple9_entry_lock);
    }

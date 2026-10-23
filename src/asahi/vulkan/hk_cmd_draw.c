@@ -303,7 +303,7 @@ hk_build_bg_eot(struct hk_cmd_buffer *cmd, const VkRenderingInfo *info,
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
    struct hk_rendering_state *render = &cmd->state.gfx.render;
 
-   if (dev->dev.chip == AGX_CHIP_G16G)
+   if (agx_is_g16(&dev->dev))
       return hk_apple9_build_bg_eot(cmd, info, store, partial_render,
                                    incomplete_render_area);
 
@@ -607,7 +607,7 @@ hk_render_merge_enabled(struct hk_cmd_buffer *cmd)
    if (enabled < 0)
       enabled = debug_get_bool_option("HK_APPLE9_MERGE_RENDERS", true);
 
-   return enabled && hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G &&
+   return enabled && agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) &&
           cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY && !cmd->in_meta;
 }
 
@@ -692,7 +692,7 @@ hk_render_suspend_keeps_open(struct hk_cmd_buffer *cmd, struct hk_cs *cs)
       enabled = debug_get_bool_option("HK_APPLE9_MERGE_RESUME", true);
    const struct hk_rendering_state *render = &cmd->state.gfx.render;
    return enabled && cs && (render->flags & VK_RENDERING_SUSPENDING_BIT) &&
-          hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G &&
+          agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) &&
           cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY && !cmd->in_meta &&
           !cmd->sync_fallback && !cmd->current_cs.pre_gfx &&
           !cmd->current_cs.post_gfx && !cmd->tess_batch.draws;
@@ -836,7 +836,7 @@ hk_CmdBeginRendering(VkCommandBuffer commandBuffer,
    render->tilebuffer = agx_build_tilebuffer_layout(
       formats, render->color_att_count, render->tilebuffer.nr_samples, true);
 
-   if (hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G) {
+   if (agx_is_g16(&hk_cmd_buffer_device(cmd)->dev)) {
       unsigned bytes = 0;
       for (unsigned rt = 0; rt < render->color_att_count; ++rt) {
          render->tilebuffer._offset_B[rt] = bytes;
@@ -1002,7 +1002,7 @@ hk_CmdBeginRendering(VkCommandBuffer commandBuffer,
                        NULL);
 
    const bool drop_stores =
-      hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G &&
+      agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) &&
       !(render->flags & VK_RENDERING_SUSPENDING_BIT);
    /* The first render pass of a chain decides its loads. */
    if (!resume) {
@@ -1380,7 +1380,7 @@ hk_init_heap(const void *data)
     * heap. Apple9 draws address index buffers through the USC aperture.
     */
    enum agx_bo_flags flags =
-      dev->dev.chip == AGX_CHIP_G16G ? AGX_BO_LOW_VA : 0;
+      agx_is_g16(&dev->dev) ? AGX_BO_LOW_VA : 0;
    dev->heap = agx_bo_create(&dev->dev, size, 0, flags, "Geometry heap");
 
    if (!dev->heap)
@@ -1555,7 +1555,7 @@ hk_rast_prim(struct hk_cmd_buffer *cmd)
 static struct agx_ptr
 hk_geom_index_alloc(struct hk_cmd_buffer *cmd, uint32_t size)
 {
-   if (hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G)
+   if (agx_is_g16(&hk_cmd_buffer_device(cmd)->dev))
       return hk_pool_usc_alloc(cmd, size, 4);
    else
       return hk_pool_alloc(cmd, size, 4);
@@ -4494,7 +4494,7 @@ hk_handle_passthrough_gs(struct hk_cmd_buffer *cmd, struct agx_draw draw)
       dyn->ia.primitive_topology ==
          VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY;
    bool stipple_gs =
-      hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G && fs_stipple &&
+      agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) && fs_stipple &&
       !gfx->shaders[MESA_SHADER_TESS_EVAL] &&
       fs_stipple->info.fs.line_stipple_start && dyn->rs.line.stipple.enable &&
       (stipple_strip ||
@@ -4504,7 +4504,7 @@ hk_handle_passthrough_gs(struct hk_cmd_buffer *cmd, struct agx_draw draw)
    /* Polygon mode POINT on triangles draws real points from a software
     * polygon stage, see hk_apple9_polygon_point_gs. */
    bool polygon_points =
-      hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G && fs_stipple &&
+      agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) && fs_stipple &&
       fs_stipple->info.fs.polygon_points &&
       dyn->rs.polygon_mode == VK_POLYGON_MODE_POINT &&
       u_reduced_prim(hk_gs_in_prim(cmd)) == MESA_PRIM_TRIANGLES;
@@ -4540,7 +4540,7 @@ hk_handle_passthrough_gs(struct hk_cmd_buffer *cmd, struct agx_draw draw)
 
    /* ...or to give the fragment shader flat copies of per-vertex inputs */
    struct hk_api_shader *fs_api_copies = gfx->shaders[MESA_SHADER_FRAGMENT];
-   if (hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G && fs_api_copies) {
+   if (agx_is_g16(&hk_cmd_buffer_device(cmd)->dev) && fs_api_copies) {
       const struct hk_shader *fs_copies = hk_only_variant(fs_api_copies);
       /* The vertex shader writes the barycentric weights of non-indexed
        * triangle lists when there are no per-vertex inputs. */
@@ -4600,7 +4600,7 @@ hk_handle_passthrough_gs(struct hk_cmd_buffer *cmd, struct agx_draw draw)
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
    perf_debug(cmd, "Binding passthrough GS for%s\n", xfb_outputs ? " XFB" : "");
 
-   if (dev->dev.chip == AGX_CHIP_G16G) {
+   if (agx_is_g16(&dev->dev)) {
       struct hk_api_shader *fs_api = gfx->shaders[MESA_SHADER_FRAGMENT];
       struct hk_shader *fs = fs_api ? hk_only_variant(fs_api) : NULL;
       struct hk_apple9_passthrough_suffix suffix = {
@@ -4758,7 +4758,7 @@ hk_CmdBindIndexBuffer2KHR(VkCommandBuffer commandBuffer, VkBuffer _buffer,
    /* TODO: check if necessary, blob does this. G16G bounds the fetch by the
     * exact extent; rounding would expose an out-of-range narrow index.
     */
-   if (hk_cmd_buffer_device(cmd)->dev.chip != AGX_CHIP_G16G) {
+   if (!agx_is_g16(&hk_cmd_buffer_device(cmd)->dev)) {
       cmd->state.gfx.index.buffer.range =
          align(cmd->state.gfx.index.buffer.range, 4);
    }
@@ -5037,7 +5037,7 @@ hk_draw(struct hk_cmd_buffer *cmd, uint16_t draw_id, struct agx_draw draw_)
        (draw_.b.count[0] == 0 || draw_.b.count[1] == 0))
       return;
 
-   if (hk_cmd_buffer_device(cmd)->dev.chip == AGX_CHIP_G16G) {
+   if (agx_is_g16(&hk_cmd_buffer_device(cmd)->dev)) {
       /* Index fetch and indirect arguments are buffer reads of tiling. */
       if (!hk_apple9_prepare_draw(cmd, agx_is_indirect(draw_.b) || draw_.indexed))
          return;
