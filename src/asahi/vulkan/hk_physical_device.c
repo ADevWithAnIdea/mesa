@@ -245,7 +245,7 @@ hk_get_device_features(
 {
    bool vertex_stores = instance->drirc.misc.enable_vertex_pipeline_stores_atomics;
 
-   if (agx_is_g16(dev)) {
+   if (agx_is_apple9(dev)) {
       /* Instance options have no device identity. Re-evaluate this feature
        * with the family tag used by device-scoped defaults, preserving the
        * usual user configuration and environment override precedence.
@@ -1988,7 +1988,7 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
    struct vk_properties properties;
    hk_get_device_properties(&pdev->dev, instance, &properties);
 
-   if (agx_is_g16(&pdev->dev)) {
+   if (agx_is_apple9(&pdev->dev)) {
       hk_apple9_restrict_caps(&supported_extensions, &supported_features,
                               &properties);
       /* Sample positions are per render and a change splits the render, so
@@ -2010,7 +2010,7 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
     * hides both. With 128 B image and sampler parts vkd3d-proton finds its
     * host copy templates; in-world ELDEN RING runs 13% faster with it (x86
     * driver) and 5% (FEX thunk), with descriptor CPU near zero (2026-10-11). */
-   if (agx_is_g16(&pdev->dev) &&
+   if (agx_is_apple9(&pdev->dev) &&
        debug_get_bool_option("HK_APPLE9_DESCRIPTOR_BUFFER", true)) {
       supported_extensions.EXT_descriptor_buffer = true;
       supported_features.descriptorBuffer = true;
@@ -2031,9 +2031,9 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
       goto fail_agx_device;
 
    /* Set by driconf for vkd3d-proton, see hk_apple9_arrayed_2d_views. */
-   pdev->apple9_layered_2d = agx_is_g16(&pdev->dev) &&
+   pdev->apple9_layered_2d = agx_is_apple9(&pdev->dev) &&
       instance->drirc.misc.apple9_arrayed_2d_views;
-   pdev->apple9_d3d_mip_rounding = agx_is_g16(&pdev->dev) &&
+   pdev->apple9_d3d_mip_rounding = agx_is_apple9(&pdev->dev) &&
       instance->drirc.misc.apple9_d3d_mip_rounding;
 
    hk_physical_device_init_pipeline_cache(pdev);
@@ -2075,7 +2075,7 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
    };
 
    pdev->apple9_descriptor_mem_type = UINT8_MAX;
-   if (agx_is_g16(&pdev->dev) &&
+   if (agx_is_apple9(&pdev->dev) &&
        debug_get_bool_option("HK_APPLE9_DESCRIPTOR_BUFFER", true)) {
       pdev->apple9_descriptor_mem_type = pdev->mem_type_count;
       pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType){
@@ -2091,7 +2091,7 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
    assert(pdev->mem_type_count <= ARRAY_SIZE(pdev->mem_types));
 
    pdev->queue_families[pdev->queue_family_count++] = (struct hk_queue_family){
-      .queue_flags = agx_is_g16(&pdev->dev)
+      .queue_flags = agx_is_apple9(&pdev->dev)
                         ? VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT |
                              VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT :
                      VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT |
@@ -2101,7 +2101,7 @@ hk_create_drm_physical_device(struct vk_instance *_instance,
    };
    /* Vulkan 1.4 requires a second transfer-capable family without host image
     * copies. Its queues submit through their own kernel command queues. */
-   if (agx_is_g16(&pdev->dev)) {
+   if (agx_is_apple9(&pdev->dev)) {
       pdev->queue_families[pdev->queue_family_count++] = (struct hk_queue_family){
          .queue_flags = VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
          .queue_count = 1,

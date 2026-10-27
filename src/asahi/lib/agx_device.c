@@ -762,7 +762,11 @@ agx_open_device(void *memctx, struct agx_device *dev)
     * kernel owns the top of this aperture on native G16. PPP and VDM records
     * occupy the remaining interval and are retained by their submitting batch.
     * Keep this heap disjoint from main_heap and the fixed USC aperture. */
-   uint64_t context_start = AGX_APPLE9_RENDER_CONTEXT_BASE + 0x4000000ull;
+   /* G17P's source-owned initial tiler-growth tranche occupies offsets
+    * [0x02000000, 0x05200000). Keep caller command/PPP state above it;
+    * later growth tranches are selected around existing caller mappings. */
+   uint64_t context_start = AGX_APPLE9_RENDER_CONTEXT_BASE +
+      (dev->params.gpu_generation == 17 ? 0x8000000ull : 0x4000000ull);
    uint64_t context_end =
       MIN2(vm_create.kernel_start,
            AGX_APPLE9_RENDER_CONTEXT_BASE + (1ull << 32));
@@ -813,11 +817,10 @@ agx_open_device(void *memctx, struct agx_device *dev)
    }
 
    /* Apple9 GPUs require their generation-specific graphics path. */
-   dev->apple9_direct_render =
-      agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P;
+   dev->apple9_direct_render = agx_is_apple9(dev);
    dev->apple9_trace = agx_apple9_trace_enabled();
 
-   if (agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P) {
+   if (agx_is_apple9(dev)) {
       simple_mtx_init(&dev->apple9_entry_lock, mtx_plain);
       list_inithead(&dev->apple9_entry_lru);
       util_vma_heap_init(&dev->apple9_entry_heap, AGX_APPLE9_ENTRY_HEADER_SIZE,
@@ -895,7 +898,7 @@ agx_close_device(struct agx_device *dev)
    agx_bo_unreference(dev, dev->scratch_bo);
    u_printf_destroy(&dev->printf);
    agx_bo_cache_evict_all(dev);
-   if (agx_is_g16(dev) || dev->chip == AGX_CHIP_G17P) {
+   if (agx_is_apple9(dev)) {
       util_vma_heap_finish(&dev->apple9_entry_heap);
       simple_mtx_destroy(&dev->apple9_entry_lock);
    }

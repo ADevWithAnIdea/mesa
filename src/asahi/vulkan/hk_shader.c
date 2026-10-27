@@ -342,7 +342,7 @@ hk_preprocess_nir_internal(struct vk_physical_device *vk_pdev, nir_shader *nir)
    /* Optimize but allow copies because we haven't lowered them yet */
    struct hk_physical_device *pdev =
       container_of(vk_pdev, struct hk_physical_device, vk);
-   if (agx_is_g16(&pdev->dev))
+   if (agx_is_apple9(&pdev->dev))
       NIR_PASS(_, nir, agx_nir_lower_apple9_math);
    agx_preprocess_nir(nir);
 
@@ -1421,7 +1421,7 @@ hk_hash_graphics_state(struct vk_physical_device *device,
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
    struct hk_physical_device *pdev = container_of(device, struct hk_physical_device, vk);
-   if (agx_is_g16(&pdev->dev) && state) {
+   if (agx_is_apple9(&pdev->dev) && state) {
       struct hk_apple9_graphics_key key;
       hk_apple9_graphics_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
@@ -3786,7 +3786,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
    /* Apple9 bounds-checks buffer images in software against their element
     * count (hk_apple9_lower_storage_image). */
    NIR_PASS(_, nir, agx_nir_lower_texture_early, true /* support_lod_bias */,
-            agx_is_g16(&dev->dev));
+            agx_is_apple9(&dev->dev));
    if (hk_device_physical(dev)->apple9_d3d_mip_rounding)
       NIR_PASS(_, nir, nir_shader_tex_pass, hk_lower_d3d_txl_rounding,
                nir_metadata_control_flow, NULL);
@@ -3799,16 +3799,16 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
 
    /* Apple9 pays for the clamp only when the application enables the
     * extension. */
-   if (agx_is_g16(&dev->dev)
+   if (agx_is_apple9(&dev->dev)
           ? dev->vk.enabled_features.minLod
           : instance->drirc.misc.image_view_min_lod) {
       NIR_PASS(_, nir, agx_nir_lower_image_view_min_lod,
-               agx_is_g16(&dev->dev));
+               agx_is_apple9(&dev->dev));
    }
 
    /* Apple9 exposes no custom border colors. */
    if ((features & HK_FEAT_CUSTOM_BORDER) && !HK_PERF(dev, NOBORDER) &&
-       !agx_is_g16(&dev->dev)) {
+       !agx_is_apple9(&dev->dev)) {
       NIR_PASS(_, nir, agx_nir_lower_custom_border);
    }
 
@@ -3839,7 +3839,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
     * fields at x + c are no longer provably adjacent, and every field of a
     * dynamically indexed struct becomes a separate scalar load.
     */
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       /* Explicit I/O builds each access's base and offset afresh. The
        * vectorizer only merges accesses sharing those definitions. */
       NIR_PASS(_, nir, nir_opt_cse);
@@ -3878,8 +3878,8 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
 
    struct hk_bounded_lowering bounded = {
       .soft_fault = agx_has_soft_fault(&dev->dev),
-      .apple9 = agx_is_g16(&dev->dev),
-      .per_component = agx_is_g16(&dev->dev),
+      .apple9 = agx_is_apple9(&dev->dev),
+      .per_component = agx_is_apple9(&dev->dev),
    };
    NIR_PASS(_, nir, nir_shader_intrinsics_pass,
             lower_load_global_constant_offset_instr, nir_metadata_none,
@@ -3922,7 +3922,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
 
    /* Apple9 interpolation packets address a fixed coefficient. Expand
     * dynamic fragment input indexing before lowering away the array derefs. */
-   if (agx_is_g16(&dev->dev) &&
+   if (agx_is_apple9(&dev->dev) &&
        nir->info.stage == MESA_SHADER_FRAGMENT)
       lower_indirect_modes |= nir_var_shader_in;
 
@@ -3956,13 +3956,13 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_shader_intrinsics_pass,
-               agx_is_g16(&dev->dev)
+               agx_is_apple9(&dev->dev)
                   ? hk_apple9_lower_layer_viewport_fs
                   : lower_viewport_fs,
                nir_metadata_control_flow, NULL);
    }
 
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       /* Buffer residency lookups add control flow. */
       NIR_PASS(_, nir, hk_apple9_lower_sparse_residency);
       /* Texel-buffer bounds and RGB32 checks add control flow. */
@@ -3979,7 +3979,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
       _mesa_set_destroy(texture_loads, NULL);
    }
 
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       NIR_PASS(_, nir, nir_shader_intrinsics_pass, hk_apple9_lower_buffer_address,
                nir_metadata_control_flow, NULL);
       NIR_PASS(_, nir, agx_nir_lower_images);
@@ -3994,10 +3994,10 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
 
    /* Keep radians until Apple9 range reduction. The common preprocessor
     * otherwise replaces sine/cosine with the older fsin_agx operation. */
-   if (agx_is_g16(&dev->dev))
+   if (agx_is_apple9(&dev->dev))
       NIR_PASS(_, nir, agx_nir_lower_apple9_math);
    agx_preprocess_nir(nir);
-   if (agx_is_g16(&dev->dev))
+   if (agx_is_apple9(&dev->dev))
       hk_apple9_lower_image_barriers(nir);
 
    nir_opt_peephole_select_options peephole_select_options = {
@@ -4172,7 +4172,7 @@ hk_apple9_init_render_stage(struct hk_shader *s)
 static VkResult
 hk_upload_shader(struct hk_device *dev, struct hk_shader *shader)
 {
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       if (!shader->code_size ||
           (shader->info.stage == MESA_SHADER_COMPUTE &&
            agx_is_shader_empty(&shader->b)))
@@ -4730,14 +4730,14 @@ hk_compile_nir(struct hk_device *dev, const VkAllocationCallbacks *pAllocator,
       }
    }
 
-   if (agx_is_g16(&dev->dev) &&
+   if (agx_is_apple9(&dev->dev) &&
        !hk_apple9_texture_bindings(nir)) {
       ralloc_free(nir);
       return vk_errorf(dev, VK_ERROR_FEATURE_NOT_PRESENT,
                        "Apple9 texture operation without a descriptor handle");
    }
 
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       const char *reason = NULL;
       if (!agx_nir_lower_apple9_runtime_sampler_state(nir, &reason)) {
          ralloc_free(nir);
@@ -4756,7 +4756,7 @@ hk_compile_nir(struct hk_device *dev, const VkAllocationCallbacks *pAllocator,
    /* XXX: rename */
    NIR_PASS(_, nir, hk_lower_uvs_index, sw_stage, nr_vbos);
    NIR_PASS(_, nir, nir_shader_intrinsics_pass,
-            agx_is_g16(&dev->dev) ? hk_apple9_lower_roots : lower_uniforms,
+            agx_is_apple9(&dev->dev) ? hk_apple9_lower_roots : lower_uniforms,
             nir_metadata_control_flow, &root);
 
 #if 0
@@ -4790,7 +4790,7 @@ hk_compile_nir(struct hk_device *dev, const VkAllocationCallbacks *pAllocator,
       simple_mtx_lock(lock);
 
    assert(nir->info.io_lowered);
-   if (agx_is_g16(&dev->dev)) {
+   if (agx_is_apple9(&dev->dev)) {
       /* A compute entrypoint without side effects has no GPU work, even
        * when loads and arithmetic remain, for example once optimization has
        * proved every store unreachable. Keep the common Asahi empty-shader
@@ -5011,7 +5011,7 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
 
    /* We consume the NIR, regardless of success or failure */
    nir_shader *nir = info->nir;
-   if (agx_is_g16(&dev->dev) && info->stage == MESA_SHADER_GEOMETRY) {
+   if (agx_is_apple9(&dev->dev) && info->stage == MESA_SHADER_GEOMETRY) {
       /* Internal geometry shaders, such as the transform feedback
        * passthrough, use the Apple9 geometry pipeline.
        */
@@ -5027,7 +5027,7 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
       *shader_out = out ? container_of(out, struct hk_api_shader, vk) : NULL;
       return result;
    }
-   if (agx_is_g16(&dev->dev) && info->stage != MESA_SHADER_COMPUTE) {
+   if (agx_is_apple9(&dev->dev) && info->stage != MESA_SHADER_COMPUTE) {
       ralloc_free(nir);
       return vk_errorf(dev, VK_ERROR_FEATURE_NOT_PRESENT,
                        "Apple9 Honeykrisp currently supports compute shaders only");
@@ -7061,7 +7061,7 @@ hk_compile_shaders_timed(struct vk_device *vk_dev, uint32_t shader_count,
          nir_shader_gather_info(shaders[i], nir_shader_get_entrypoint(shaders[i]));
    }
 
-   if (agx_is_g16(&dev->dev) && shader_count &&
+   if (agx_is_apple9(&dev->dev) && shader_count &&
        infos[0].stage != MESA_SHADER_COMPUTE) {
       if (hk_apple9_needs_deferral(shader_count, infos, state, features))
          return hk_apple9_defer_graphics(dev, shader_count, infos, state,
