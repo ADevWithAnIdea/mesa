@@ -13,6 +13,7 @@
 #include "util/format/u_formats.h"
 #include "util/macros.h"
 #include "util/u_math.h"
+#include "util/u_debug.h"
 #include "vulkan/vulkan_core.h"
 #include <sys/mman.h>
 
@@ -35,6 +36,8 @@
  * alignment 65k.
  */
 #define HK_SPARSE_ALIGN_B 65536
+
+DEBUG_GET_ONCE_NUM_OPTION(hk_nocomp_input, "HK_NOCOMP_INPUT", 2)
 
 static VkFormatFeatureFlags2
 hk_get_image_plane_format_features(struct hk_physical_device *pdev,
@@ -223,6 +226,14 @@ vk_image_usage_to_format_features(VkImageUsageFlagBits usage_flag)
 }
 
 static bool
+hk_unsafe_compressed_input_format(enum pipe_format format)
+{
+   return util_format_is_srgb(format) ||
+          format == PIPE_FORMAT_R10G10B10A2_UNORM ||
+          format == PIPE_FORMAT_B10G10R10A2_UNORM;
+}
+
+static bool
 hk_can_compress(const struct agx_device *dev, VkFormat format, unsigned plane,
                 unsigned width, unsigned height, unsigned samples,
                 VkImageCreateFlagBits flags, VkImageUsageFlagBits usage,
@@ -278,6 +289,20 @@ hk_can_compress(const struct agx_device *dev, VkFormat format, unsigned plane,
 
    enum pipe_format p_format = hk_format_to_pipe_format(format);
 
+   /* G16 compressed sRGB and 10:10:10:2 input attachments can misdecode
+    * between subpasses. Keep these allocations uncompressed until the
+    * render-side metadata visibility requirement is understood. An explicit
+    * imported modifier still describes the actual external allocation.
+    */
+   bool protect_input = agx_is_apple9(dev) &&
+                        (usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+   if (protect_input) {
+      unsigned policy = debug_get_option_hk_nocomp_input();
+      if (policy == 1 ||
+          (policy == 2 && hk_unsafe_compressed_input_format(p_format)))
+         return false;
+   }
+
    /* Shared-exponent encodings do not round-trip through texture reads.
     * Apple9's raw transfer path preserves their bits without compression. */
    if (agx_is_apple9(dev) && p_format == PIPE_FORMAT_R9G9B9E5_FLOAT)
@@ -297,6 +322,12 @@ hk_can_compress(const struct agx_device *dev, VkFormat format, unsigned plane,
 
          enum pipe_format view_format =
             hk_format_to_pipe_format(format_list->pViewFormats[i]);
+
+         /* An UNORM allocation can still be read through an sRGB input
+          * attachment view. Apply the same workaround to allowed views. */
+         if (protect_input && debug_get_option_hk_nocomp_input() == 2 &&
+             hk_unsafe_compressed_input_format(view_format))
+            return false;
 
          if (!ail_formats_compatible(p_format, view_format)) {
             perf_debug_dev(dev, "No compression: incompatible image view");
