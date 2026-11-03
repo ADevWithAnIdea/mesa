@@ -78,6 +78,8 @@ uint64_t agx_best_modifiers[] = {
  */
 #define MAX_TOTAL_SHADOW_BYTES (32 * 1024 * 1024)
 
+DEBUG_GET_ONCE_NUM_OPTION(agx_upload_decompress, "AGX_UPLOAD_DECOMPRESS", 4)
+
 void agx_init_state_functions(struct pipe_context *ctx);
 
 /*
@@ -1073,6 +1075,17 @@ agx_transfer_map(struct pipe_context *pctx, struct pipe_resource *resource,
    /* Can't transfer out of bounds mip levels */
    if (level >= rsrc->layout.levels)
       return NULL;
+
+   unsigned upload_limit = debug_get_option_agx_upload_decompress();
+   if ((usage & PIPE_MAP_WRITE) && rsrc->layout.compressed && upload_limit &&
+       !(resource->bind & (PIPE_BIND_SHARED | PIPE_BIND_SCANOUT | PIPE_BIND_DEPTH_STENCIL)) &&
+       !(rsrc->bo->flags & AGX_BO_SHAREABLE) && !rsrc->separate_stencil &&
+       !util_format_is_depth_or_stencil(resource->format)) {
+      if (rsrc->cpu_uploads < upload_limit)
+         rsrc->cpu_uploads++;
+      if (rsrc->cpu_uploads >= upload_limit)
+         agx_decompress(ctx, rsrc, "Repeated CPU uploads");
+   }
 
    /* For compression, we use a staging blit as we do not implement AGX
     * compression in software. In some cases, we could use this path for

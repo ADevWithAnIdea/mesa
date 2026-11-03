@@ -1046,6 +1046,11 @@ struct agx_resource {
     */
    bool mipmapped;
 
+   /* Repeated CPU uploads make compressed staging blits more expensive than
+    * keeping the texture in the ordinary tiled layout.
+    */
+   unsigned cpu_uploads;
+
    /* Hardware backing */
    struct agx_bo *bo;
 
