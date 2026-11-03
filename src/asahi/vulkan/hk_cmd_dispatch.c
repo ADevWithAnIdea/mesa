@@ -24,6 +24,20 @@
 #include "libagx_dgc.h"
 #include "libagx_shaders.h"
 #include "pool.h"
+#include "util/u_debug.h"
+
+DEBUG_GET_ONCE_BOOL_OPTION(hk_cdm_flush_start, "HK_CDM_FLUSH_START", true)
+
+static bool
+hk_cdm_needs_entry_flush(const struct hk_device *dev, const struct hk_cs *cs)
+{
+   /* Compression metadata caches survive command-stream boundaries. The
+    * first image read must invalidate metadata left by an earlier render,
+    * even though this new stream has not written anything yet.
+    */
+   return agx_is_apple9(&dev->dev) && !cs->stats.cmds &&
+          debug_get_option_hk_cdm_flush_start();
+}
 
 void
 hk_cmd_buffer_begin_compute(struct hk_cmd_buffer *cmd,
@@ -84,7 +98,8 @@ hk_dispatch_with_usc_launch(struct hk_device *dev, struct hk_cs *cs,
                             struct agx_workgroup wg)
 {
    hk_ensure_cs_has_space(cs->cmd, cs, 0x2000 /* TODO */);
-   if (!cs->cmd->api_dispatch && cs->cdm_dirty)
+   if (hk_cdm_needs_entry_flush(dev, cs) ||
+       (!cs->cmd->api_dispatch && cs->cdm_dirty))
       hk_cdm_cache_flush(dev, cs);
    cs->stats.cmds++;
 
@@ -548,9 +563,9 @@ hk_apple9_dispatch(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
       hk_tess_batch_flush(cmd);
 
    bool barrier = !cmd->api_dispatch;
-   bool flush_before =
-      cs->cdm_dirty &&
-      (cs->cdm_compute_barrier ? agx_is_indirect(grid) : barrier);
+   bool flush_before = hk_cdm_needs_entry_flush(dev, cs) ||
+      (cs->cdm_dirty &&
+       (cs->cdm_compute_barrier ? agx_is_indirect(grid) : barrier));
    if (!barrier)
       record_size -= AGX_CDM_BARRIER_LENGTH;
 
@@ -769,7 +784,8 @@ hk_tess_batch_flush(struct hk_cmd_buffer *cmd)
          unsigned size = *data++;
          hk_ensure_cs_has_space(cmd, cs, size + 2 * AGX_CDM_BARRIER_LENGTH);
          /* Whatever came before the batch must be complete. */
-         if (first && cs->cdm_dirty && !cs->cdm_compute_barrier)
+         if (first && (hk_cdm_needs_entry_flush(dev, cs) ||
+                       (cs->cdm_dirty && !cs->cdm_compute_barrier)))
             hk_cdm_cache_flush(dev, cs);
          first = false;
          memcpy(cs->current, data, size);
