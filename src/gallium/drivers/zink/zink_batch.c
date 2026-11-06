@@ -141,12 +141,12 @@ reset_batch_state_internal(struct zink_screen *screen, struct zink_batch_state *
    util_dynarray_clear(&bs->fences);
 
    /* only increment batch generation if previously in-use to avoid false detection of batch completion */
-   if (bs->fence.submitted)
-      bs->usage.submit_count++;
+   if (p_atomic_read(&bs->fence.submitted))
+      p_atomic_inc(&bs->usage.submit_count);
    /* only reset submitted here so that tc fence desync can pick up the 'completed' flag
     * before the state is reused
     */
-   bs->fence.submitted = false;
+   p_atomic_set(&bs->fence.submitted, false);
    if (bs->fence.batch_id)
       zink_screen_update_last_finished(screen, bs->fence.batch_id);
    bs->fence.batch_id = 0;
@@ -438,7 +438,7 @@ find_completed_batch_state(struct zink_context *ctx)
    while (i) {
       struct zink_batch_state *j = i->next;
       /* only a submitted state can be reused */
-      if (i->fence.submitted &&
+      if (p_atomic_read(&i->fence.submitted) &&
           /* a submitted state must have completed before it can be reused */
           (zink_screen_check_last_finished(screen, i->fence.batch_id) || i->fence.completed)) {
          pop_batch_state(ctx);
@@ -650,6 +650,7 @@ submit_queue(void *data, void *gdata, int thread_index)
    VkSubmitInfo si[ZINK_SUBMIT_MAX] = {0};
    VkSubmitInfo *submit = si;
    int num_si = ZINK_SUBMIT_MAX;
+   bool update_usage = false;
    while (!bs->fence.batch_id)
       bs->fence.batch_id = (uint32_t)p_atomic_inc_return(&screen->curr_batch);
    bs->usage.usage = bs->fence.batch_id;
@@ -840,13 +841,18 @@ submit_queue(void *data, void *gdata, int thread_index)
    if (bs->sparse_semaphore)
       (void)util_dynarray_pop(&bs->acquires, VkSemaphore);
 
-   bs->usage.submit_count++;
+   update_usage = true;
 end:
+   /* A new submit generation with submitted == false denotes a reset batch
+    * to zink_fence_finish(). Publish submitted before advancing the generation,
+    * or a concurrent fence wait can mistake an in-flight batch for a reset one.
+    */
+   p_atomic_set(&bs->fence.submitted, true);
+   if (update_usage)
+      p_atomic_inc(&bs->usage.submit_count);
    cnd_broadcast(&bs->usage.flush);
 
    post_submit(bs, screen);
-
-   p_atomic_set(&bs->fence.submitted, true);
 
    simple_mtx_lock(&screen->active_batch_states_lock);
    simple_mtx_lock(&screen->free_batch_states_lock);
@@ -1200,7 +1206,7 @@ zink_batch_usage_unflushed_wait(struct zink_context *ctx, struct zink_batch_usag
    if (!zink_batch_usage_exists(u))
       return true;
    /* this batch state was already completed and reset */
-   if (zink_batch_submit_count_diff(u->submit_count, submit_count) > 1)
+   if (zink_batch_submit_count_diff(p_atomic_read(&u->submit_count), submit_count) > 1)
       return true;
    if (zink_batch_usage_is_unflushed(u)) {
       if (likely(u == &ctx->bs->usage)) {
@@ -1226,7 +1232,7 @@ batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned 
    if (!zink_batch_usage_exists(u))
       return;
    /* this batch state was already completed and reset */
-   if (zink_batch_submit_count_diff(u->submit_count, submit_count) > 1)
+   if (zink_batch_submit_count_diff(p_atomic_read(&u->submit_count), submit_count) > 1)
       return;
    if (zink_batch_usage_unflushed_wait(ctx, u, submit_count, trywait))
       zink_wait_on_batch(ctx, u->usage);

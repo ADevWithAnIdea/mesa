@@ -4558,7 +4558,7 @@ zink_flush(struct pipe_context *pctx,
       mfence->fence = &bs->fence;
       mfence->sem = export_sem;
       if (bs) {
-         mfence->submit_count = bs->usage.submit_count;
+         mfence->submit_count = p_atomic_read(&bs->usage.submit_count);
          util_dynarray_append(&bs->fence.mfences, mfence);
       }
       if (export_sem) {
