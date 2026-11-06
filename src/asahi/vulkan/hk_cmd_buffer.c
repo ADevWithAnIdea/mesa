@@ -239,6 +239,7 @@ hk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    cmd->heap_renders = 0;
    cmd->uses_mesh_heap = false;
    cmd->sync_fallback = false;
+   cmd->render_host_flush_required = false;
    cmd->sync_next_group = 0;
    cmd->sync_scope = 0;
    cmd->sync_render_stages = 0;
@@ -543,6 +544,39 @@ merge_control_streams(struct hk_cmd_buffer *cmd)
    }
 }
 
+DEBUG_GET_ONCE_BOOL_OPTION(hk_render_availability, "HK_RENDER_AVAILABILITY", true)
+
+static void
+hk_make_render_writes_available(struct hk_cmd_buffer *cmd)
+{
+   struct hk_device *dev = hk_cmd_buffer_device(cmd);
+   if (!cmd->render_host_flush_required || !agx_is_apple9(&dev->dev) ||
+       !debug_get_option_hk_render_availability())
+      return;
+
+   bool has_render = false;
+   list_for_each_entry(struct hk_cs, cs, &cmd->control_streams, node)
+      has_render |= cs->type == HK_CS_VDM;
+   if (!has_render)
+      return;
+
+   /* Render retirement can precede visibility of fragment stores to the
+    * host. Use the existing query-availability sequence: a full CDM cache
+    * flush followed by a real private write. A cache-only stream has no
+    * normal compute-completion timestamp. Keep the private write ordered
+    * after all preceding work, without changing earlier stream dependencies.
+    */
+   struct agx_ptr marker = hk_pool_alloc(cmd, 4, 4);
+   if (!marker.gpu)
+      return;
+
+   hk_cmd_sync_barrier(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_MEMORY_WRITE_BIT,
+                       VK_ACCESS_2_SHADER_WRITE_BIT);
+   hk_queue_write(cmd, marker.gpu, 0, false);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 hk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
@@ -554,6 +588,7 @@ hk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 
    perf_debug(cmd, "End command buffer");
    hk_flush_query_writes(cmd);
+   hk_make_render_writes_available(cmd);
    hk_cs_end_hint(cmd, HK_CS_END_CMDBUF);
    hk_cmd_buffer_end_compute(cmd);
    hk_cs_end_hint(cmd, HK_CS_END_CMDBUF);
@@ -860,6 +895,18 @@ hk_cmd_sync_barrier(struct hk_cmd_buffer *cmd,
                     VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
                     VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
 {
+   /* Fences order completion, but a HOST_READ memory dependency must also
+    * make render stores visible to the CPU. Ending VDM alone does not flush
+    * those stores on Apple9. Coalesce that availability work at command end;
+    * ordinary render/present command buffers need no extra dispatch.
+    */
+   if (agx_is_apple9(&hk_cmd_buffer_device(cmd)->dev) &&
+       (dst & VK_PIPELINE_STAGE_2_HOST_BIT) &&
+       (vk_filter_dst_access_flags2(dst, dst_access) & VK_ACCESS_2_HOST_READ_BIT) &&
+       (hk_sync_stage_mask(src, true) & (HK_SYNC_GRAPHICS | HK_SYNC_TRANSFER)) &&
+       (vk_filter_src_access_flags2(src, src_access) & ~VK_ACCESS_2_HOST_WRITE_BIT))
+      cmd->render_host_flush_required = true;
+
    /* No synchronization may come between a suspended render pass and the
     * one resuming it; if any does, end the render as before. */
    if (cmd->merge_cs && cmd->merge_suspended)
@@ -926,8 +973,8 @@ hk_cmd_sync_barrier(struct hk_cmd_buffer *cmd,
 
    /* Access scopes govern availability/visibility, not execution ordering:
     * even zero-access WAR barriers must split ordered streams. Stream endings
-    * currently provide full cache maintenance, covering the filtered access
-    * scopes as well as implicit attachment stores.
+    * provide CDM cache maintenance. Graphics-to-host availability is tracked
+    * separately and emitted before command-buffer retirement.
     */
    src_access = vk_filter_src_access_flags2(src, src_access);
    dst_access = vk_filter_dst_access_flags2(dst, dst_access);

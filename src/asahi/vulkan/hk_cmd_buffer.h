@@ -750,6 +750,8 @@ struct hk_cmd_buffer {
    unsigned sync_scope;
    unsigned sync_render_stages;
    bool sync_render_continuation;
+   /* A graphics-write -> HOST_READ dependency needs device-to-host flush. */
+   bool render_host_flush_required;
    bool sync_fallback;
    bool api_dispatch;
 

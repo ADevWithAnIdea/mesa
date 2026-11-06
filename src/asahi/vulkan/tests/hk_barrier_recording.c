@@ -140,7 +140,53 @@ main(void)
       util_dynarray_fini(&cmd->sync_remap);
       free(cmd);
    }
+   /* Host visibility is required for graphics writes, not ordinary present
+    * streams, read-only dependencies, or compute's existing end flush. */
+   const struct {
+      VkPipelineStageFlags2 src, dst;
+      VkAccessFlags2 writes, reads;
+      bool flush;
+   } host_cases[] = {
+      {VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_HOST_READ_BIT, true},
+      {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_2_HOST_READ_BIT, true},
+      {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT, true},
+      {VK_PIPELINE_STAGE_2_BLIT_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_HOST_READ_BIT, true},
+      {VK_PIPELINE_STAGE_2_HOST_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_HOST_WRITE_BIT, VK_ACCESS_2_HOST_READ_BIT, false},
+      {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_HOST_READ_BIT, false},
+      {VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_ACCESS_2_HOST_READ_BIT, false},
+      {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, false},
+      {VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_HOST_WRITE_BIT, false},
+      {VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, 0, false},
+   };
+   for (unsigned chip = 0; chip < ARRAY_SIZE(chips); ++chip) {
+      dev->dev.chip = chips[chip];
+      cmd = calloc(1, sizeof(*cmd));
+      CHECK(cmd);
+      cmd->vk.base.device = &dev->vk;
+      cmd->sync_events = UTIL_DYNARRAY_INIT;
+      for (unsigned i = 0; i < ARRAY_SIZE(host_cases); ++i) {
+         cmd->render_host_flush_required = false;
+         hk_cmd_sync_barrier(cmd, host_cases[i].src, host_cases[i].dst,
+                             host_cases[i].writes, host_cases[i].reads);
+         CHECK(cmd->render_host_flush_required ==
+               (chip != 0 && host_cases[i].flush));
+      }
+      util_dynarray_fini(&cmd->sync_events);
+      free(cmd);
+   }
    free(dev);
+   puts("PASS actual graphics-to-host barrier scopes; normal presents and legacy unchanged");
    puts("PASS actual CDM recording: G16G/G16C/G17P entry visibility, legacy unchanged, no duplicate entry barrier");
    return 0;
 }
